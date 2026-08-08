@@ -865,8 +865,6 @@ function updateButtons() {
       desc = '経路が短すぎます。「経路を描く」で描き直してください。';
     } else if (areaCandidateCount === 0) {
       desc = 'この経路を囲むエリアを通過した台風が見つかりません。経路を変更してください。';
-    } else if (areaCandidateCount > AREA_ONLY_SEARCH_MAX) {
-      desc = `エリア内の候補が${areaCandidateCount}件と多いため、このままでは検索できません。詳細設定（中心気圧・勢力・月）で候補を絞り込んでください。`;
     } else {
       desc = '② 準備完了です。「類似経路を検索」を押してください。';
       if (areaCandidateCount > 3) desc += ' 必要に応じて、詳細設定（中心気圧・勢力・月）で候補をさらに絞り込めます。';
