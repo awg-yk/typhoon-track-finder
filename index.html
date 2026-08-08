@@ -594,6 +594,39 @@ function areaDragUp(latlng) {
   updateAreaCount();
 }
 
+// 経路（userPoints）の外接矩形をもとに、それを囲む正方形を計算する。
+// marginRatio: 経路の周囲に余白として持たせる比率（例: 0.15 なら外接矩形の各辺を15%広げる）
+// minSpanDeg: 経路が短い（またはほぼ1点）場合でも最低限確保する一辺の緯度・経度幅
+function computeSquareBoundsFromPoints(points, marginRatio, minSpanDeg) {
+  let latMin = Infinity, latMax = -Infinity, lonMin = Infinity, lonMax = -Infinity;
+  points.forEach(p => {
+    latMin = Math.min(latMin, p.lat); latMax = Math.max(latMax, p.lat);
+    lonMin = Math.min(lonMin, p.lon); lonMax = Math.max(lonMax, p.lon);
+  });
+  const centerLat = (latMin + latMax) / 2, centerLon = (lonMin + lonMax) / 2;
+  const span = Math.max(latMax - latMin, lonMax - lonMin, minSpanDeg) * (1 + marginRatio);
+  const half = span / 2;
+  return {
+    latMin: centerLat - half, latMax: centerLat + half,
+    lonMin: centerLon - half, lonMax: centerLon + half
+  };
+}
+
+// 経路を描き終えたときに、手動でのドラッグ操作なしにその経路を囲む正方形を
+// エリアとして自動確定する（02の自動化）。
+function autoSetAreaFromLine() {
+  if (userPoints.length === 0) return;
+  areaBounds = computeSquareBoundsFromPoints(userPoints, 0.15, 1.0);
+  if (areaRectLayer) map.removeLayer(areaRectLayer);
+  areaRectLayer = L.rectangle(
+    [[areaBounds.latMin, areaBounds.lonMin], [areaBounds.latMax, areaBounds.lonMax]],
+    { color: '#4fd8cf', weight: 1.5, fillColor: '#4fd8cf', fillOpacity: .08, dashArray: '4 3', interactive: false }
+  ).addTo(map);
+  setAreaDrawingMode(false);
+  btnAreaClear.disabled = false;
+  updateAreaCount();
+}
+
 map.on('mousedown', (e) => areaDragDown(e.latlng));
 map.on('mousemove', (e) => { areaDragMove(e.latlng); routePreviewMove(e.latlng); });
 map.on('mouseup', (e) => areaDragUp(e.latlng));
@@ -661,10 +694,9 @@ map.on('dblclick', (e) => {
     }
   }
   setDrawingMode(false);
-  // 経路を描き終えたら、続けてエリアをドラッグ指定できるよう自動的に有効化する。
-  // ただし、既にエリアが指定済み（2回目以降の検索で経路だけ描き直した場合など）は
-  // ボタンが誤って「エリア指定を中止」表示のままになってしまうため、自動遷移させない。
-  setAreaDrawingMode(!areaBounds);
+  // 経路を描き終えたら、その経路を囲む正方形を自動計算してエリアとして確定する
+  // （手動でのドラッグ操作は不要。必要であれば「エリアを描く」で手動指定に切り替え可能）。
+  autoSetAreaFromLine();
   updateButtons();
 });
 
