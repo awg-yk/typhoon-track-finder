@@ -325,17 +325,7 @@
 
     <div class="section">
       <div class="section-header-row">
-        <h2>02 / エリアで絞り込む</h2>
-        <button id="btnAreaClear" class="danger advanced-reset-btn" disabled>リセット</button>
-      </div>
-      <div class="row">
-        <button id="btnAreaDraw">エリアを描く</button>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-header-row">
-        <h2>03 / 詳細設定</h2>
+        <h2>02 / 詳細設定</h2>
         <button id="btnAdvancedReset" class="danger advanced-reset-btn">リセット</button>
       </div>
       <div id="advancedBadge" class="advanced-badge"></div>
@@ -388,7 +378,7 @@
     </div>
 
     <div class="section">
-      <h2>04 / 検索</h2>
+      <h2>03 / 検索</h2>
       <button id="btnSearch" class="primary" disabled style="width:100%;">類似経路を検索</button>
     </div>
   </div>
@@ -443,13 +433,9 @@ let lastResults = [];
 let baseResults = [];
 let sortMode = 'default';
 let lastMetric = 'chamfer';
-let areaBounds = null;    // {latMin,latMax,lonMin,lonMax}
-let areaDrawingMode = false;
-let areaDragStart = null;   // ドラッグ開始地点（矩形の1つ目の角）
-let areaDragActive = false; // マウスボタンを押したままドラッグ中かどうか
+let areaBounds = null;    // {latMin,latMax,lonMin,lonMax}（経路を囲む正方形。自動計算）
 const AREA_ONLY_SEARCH_MAX = 12; // エリア絞り込みのみで検索できる候補数の上限
 let areaRectLayer = null;
-let previewRectLayer = null;
 let previewLineLayer = null;
 
 /* =========================================================
@@ -531,29 +517,6 @@ drawLabels();
 
 candidateLayer.addTo(map);
 
-/* ---- エリアのドラッグ描画（マウス／タッチ共通ロジック） ----
-   スマホでは Leaflet の 'mousedown'/'mousemove'/'mouseup' イベントが
-   タッチ操作からは発火しないため、同じ処理を関数化しておき、
-   マウスとタッチの両方から呼び出せるようにしている。 */
-function areaDragDown(latlng) {
-  if (!areaDrawingMode) return;
-  areaDragActive = true;
-  areaDragStart = { lat: latlng.lat, lon: latlng.lng };
-  if (previewRectLayer) { map.removeLayer(previewRectLayer); previewRectLayer = null; }
-  updateButtons();
-}
-
-function areaDragMove(latlng) {
-  if (!(areaDrawingMode && areaDragActive && areaDragStart)) return;
-  const p = { lat: latlng.lat, lon: latlng.lng };
-  const latMin = Math.min(areaDragStart.lat, p.lat), latMax = Math.max(areaDragStart.lat, p.lat);
-  const lonMin = Math.min(areaDragStart.lon, p.lon), lonMax = Math.max(areaDragStart.lon, p.lon);
-  if (previewRectLayer) map.removeLayer(previewRectLayer);
-  previewRectLayer = L.rectangle([[latMin, lonMin], [latMax, lonMax]], {
-    color: '#4fd8cf', weight: 1.2, fillColor: '#4fd8cf', fillOpacity: .06, dashArray: '4 3', interactive: false
-  }).addTo(map);
-}
-
 function routePreviewMove(latlng) {
   if (drawing && userPoints.length >= 1) {
     const last = userPoints[userPoints.length - 1];
@@ -564,47 +527,18 @@ function routePreviewMove(latlng) {
   }
 }
 
-function areaDragUp(latlng) {
-  if (!areaDrawingMode || !areaDragActive) return;
-  areaDragActive = false;
-  const start = areaDragStart;
-  areaDragStart = null;
-  if (!start) { updateButtons(); return; }
-
-  const p = { lat: latlng.lat, lon: latlng.lng };
-  // ドラッグ距離が小さすぎる場合（誤クリックなど）は確定せず、そのままやり直せるようにする
-  const p1 = map.latLngToContainerPoint([start.lat, start.lon]);
-  const p2 = map.latLngToContainerPoint([p.lat, p.lon]);
-  if (Math.hypot(p2.x - p1.x, p2.y - p1.y) < 6) {
-    if (previewRectLayer) { map.removeLayer(previewRectLayer); previewRectLayer = null; }
-    updateButtons();
-    return;
-  }
-
-  if (previewRectLayer) { map.removeLayer(previewRectLayer); previewRectLayer = null; }
-  const latMin = Math.min(start.lat, p.lat), latMax = Math.max(start.lat, p.lat);
-  const lonMin = Math.min(start.lon, p.lon), lonMax = Math.max(start.lon, p.lon);
-  areaBounds = { latMin, latMax, lonMin, lonMax };
-  if (areaRectLayer) map.removeLayer(areaRectLayer);
-  areaRectLayer = L.rectangle([[latMin, lonMin], [latMax, lonMax]], {
-    color: '#4fd8cf', weight: 1.5, fillColor: '#4fd8cf', fillOpacity: .08, dashArray: '4 3', interactive: false
-  }).addTo(map);
-  setAreaDrawingMode(false);
-  btnAreaClear.disabled = false;
-  updateAreaCount();
-}
-
-// 経路（userPoints）の外接矩形をもとに、それを囲む正方形を計算する。
-// marginRatio: 経路の周囲に余白として持たせる比率（例: 0.15 なら外接矩形の各辺を15%広げる）
-// minSpanDeg: 経路が短い（またはほぼ1点）場合でも最低限確保する一辺の緯度・経度幅
-function computeSquareBoundsFromPoints(points, marginRatio, minSpanDeg) {
+// 経路（userPoints）の外接矩形のうち、長い方の辺を一辺とする最小の正方形を計算する
+// （＝経路全体をちょうど囲める最小面積の正方形）。
+// minSpanDeg: 経路がほぼ1点（緯度・経度差がゼロに近い）場合でも矩形として描画できるよう
+// 最低限確保する一辺の緯度・経度幅。
+function computeSquareBoundsFromPoints(points, minSpanDeg) {
   let latMin = Infinity, latMax = -Infinity, lonMin = Infinity, lonMax = -Infinity;
   points.forEach(p => {
     latMin = Math.min(latMin, p.lat); latMax = Math.max(latMax, p.lat);
     lonMin = Math.min(lonMin, p.lon); lonMax = Math.max(lonMax, p.lon);
   });
   const centerLat = (latMin + latMax) / 2, centerLon = (lonMin + lonMax) / 2;
-  const span = Math.max(latMax - latMin, lonMax - lonMin, minSpanDeg) * (1 + marginRatio);
+  const span = Math.max(latMax - latMin, lonMax - lonMin, minSpanDeg);
   const half = span / 2;
   return {
     latMin: centerLat - half, latMax: centerLat + half,
@@ -612,69 +546,28 @@ function computeSquareBoundsFromPoints(points, marginRatio, minSpanDeg) {
   };
 }
 
-// 経路を描き終えたときに、手動でのドラッグ操作なしにその経路を囲む正方形を
-// エリアとして自動確定する（02の自動化）。
+// 経路を描き終えたときに、その経路を囲む最小の正方形をエリアとして自動確定する。
 function autoSetAreaFromLine() {
   if (userPoints.length === 0) return;
-  areaBounds = computeSquareBoundsFromPoints(userPoints, 0.15, 1.0);
+  areaBounds = computeSquareBoundsFromPoints(userPoints, 0.01);
   if (areaRectLayer) map.removeLayer(areaRectLayer);
   areaRectLayer = L.rectangle(
     [[areaBounds.latMin, areaBounds.lonMin], [areaBounds.latMax, areaBounds.lonMax]],
     { color: '#4fd8cf', weight: 1.5, fillColor: '#4fd8cf', fillOpacity: .08, dashArray: '4 3', interactive: false }
   ).addTo(map);
-  setAreaDrawingMode(false);
-  btnAreaClear.disabled = false;
   updateAreaCount();
 }
 
-map.on('mousedown', (e) => areaDragDown(e.latlng));
-map.on('mousemove', (e) => { areaDragMove(e.latlng); routePreviewMove(e.latlng); });
-map.on('mouseup', (e) => areaDragUp(e.latlng));
+// 経路がクリアされた（0点になった）ときはエリアも連動してクリアする。
+function clearArea() {
+  areaBounds = null;
+  if (areaRectLayer) { map.removeLayer(areaRectLayer); areaRectLayer = null; }
+  updateAreaCount();
+}
 
-/* ---- タッチ操作でのエリアドラッグ描画 ----
-   タッチデバイスでは 'mousedown'/'mousemove'/'mouseup' が発火しないため、
-   地図コンテナに直接 touchstart/touchmove/touchend を張って同じ処理を呼び出す。
-   エリア描画モード中のみ preventDefault し、通常のタップ（経路の点打ち）や
-   ピンチズームは邪魔しないようにする。 */
-(function setupAreaTouchDrawing() {
-  const mapEl = map.getContainer();
-
-  function touchLatLng(touch) {
-    const rect = mapEl.getBoundingClientRect();
-    const cp = L.point(touch.clientX - rect.left, touch.clientY - rect.top);
-    return map.containerPointToLatLng(cp);
-  }
-
-  mapEl.addEventListener('touchstart', (e) => {
-    if (!areaDrawingMode || e.touches.length !== 1) return;
-    e.preventDefault();
-    areaDragDown(touchLatLng(e.touches[0]));
-  }, { passive: false });
-
-  mapEl.addEventListener('touchmove', (e) => {
-    if (!areaDrawingMode || !areaDragActive || e.touches.length !== 1) return;
-    e.preventDefault();
-    areaDragMove(touchLatLng(e.touches[0]));
-  }, { passive: false });
-
-  mapEl.addEventListener('touchend', (e) => {
-    if (!areaDrawingMode || !areaDragActive) return;
-    e.preventDefault();
-    const t = e.changedTouches[0];
-    areaDragUp(touchLatLng(t));
-  }, { passive: false });
-
-  mapEl.addEventListener('touchcancel', () => {
-    if (!areaDrawingMode) return;
-    areaDragActive = false;
-    areaDragStart = null;
-    if (previewRectLayer) { map.removeLayer(previewRectLayer); previewRectLayer = null; }
-    updateButtons();
-  });
-})();
+map.on('mousemove', (e) => routePreviewMove(e.latlng));
 
 map.on('click', (e) => {
-  if (areaDrawingMode) return; // エリアはドラッグ操作で描画するため、クリックだけでは確定しない
   if (!drawing) return;
   addUserPoint(e.latlng.lat, e.latlng.lng);
 });
@@ -694,8 +587,7 @@ map.on('dblclick', (e) => {
     }
   }
   setDrawingMode(false);
-  // 経路を描き終えたら、その経路を囲む正方形を自動計算してエリアとして確定する
-  // （手動でのドラッグ操作は不要。必要であれば「エリアを描く」で手動指定に切り替え可能）。
+  // 経路を描き終えたら、その経路を囲む最小の正方形を自動計算してエリアとして確定する。
   autoSetAreaFromLine();
   updateButtons();
 });
@@ -820,8 +712,6 @@ const btnClear = document.getElementById('btnClear');
 const btnSearch = document.getElementById('btnSearch');
 const modeBadge = document.getElementById('modeBadge');
 const modeDesc = document.getElementById('modeDesc');
-const btnAreaDraw = document.getElementById('btnAreaDraw');
-const btnAreaClear = document.getElementById('btnAreaClear');
 const areaCountEl = document.getElementById('areaCount');
 
 function setDrawingMode(on) {
@@ -833,57 +723,22 @@ function setDrawingMode(on) {
   if (drawing) map.doubleClickZoom.disable(); else map.doubleClickZoom.enable();
 }
 
-// エリア（矩形）指定モードのON/OFFをまとめて管理する。
-// ONの間は地図のパン（ドラッグ移動）を無効化し、そのドラッグ操作を矩形描画に使う。
-function setAreaDrawingMode(on) {
-  areaDrawingMode = on;
-  areaDragStart = null;
-  areaDragActive = false;
-  if (previewRectLayer) { map.removeLayer(previewRectLayer); previewRectLayer = null; }
-  btnAreaDraw.classList.toggle('primary', on);
-  btnAreaDraw.textContent = on ? 'エリア指定を中止' : 'エリアを描く';
-  map.getContainer().style.cursor = on ? 'crosshair' : '';
-  if (on) map.dragging.disable(); else map.dragging.enable();
-}
-
 btnDraw.addEventListener('click', () => {
-  setAreaDrawingMode(false);
   const turningOn = !drawing;
   if (turningOn && routeNeedsResetAfterSearch && userPoints.length > 0) {
-    // 検索実行後に再度「経路を描く」を押した場合は、古い経路を自動でクリアしてから描き始める
+    // 検索実行後に再度「経路を描く」を押した場合は、古い経路（と、それに連動するエリア）を
+    // 自動でクリアしてから描き始める
     userPoints = [];
     userMarkers.forEach(m => map.removeLayer(m));
     userMarkers = [];
     if (previewLineLayer) { map.removeLayer(previewLineLayer); previewLineLayer = null; }
     redrawUserLine();
+    clearArea();
     clearResults();
   }
   routeNeedsResetAfterSearch = false;
   setDrawingMode(!drawing);
   updateButtons();
-});
-
-btnAreaDraw.addEventListener('click', () => {
-  setDrawingMode(false);
-  const turningOn = !areaDrawingMode;
-  if (turningOn && areaNeedsResetAfterSearch && areaBounds) {
-    // 検索実行後に再度「エリアを描く」を押した場合は、古いエリアを自動でクリアしてから描き始める
-    areaBounds = null;
-    if (areaRectLayer) { map.removeLayer(areaRectLayer); areaRectLayer = null; }
-    btnAreaClear.disabled = true;
-    updateAreaCount();
-  }
-  areaNeedsResetAfterSearch = false;
-  setAreaDrawingMode(!areaDrawingMode);
-  updateButtons();
-});
-
-btnAreaClear.addEventListener('click', () => {
-  areaBounds = null;
-  if (areaRectLayer) { map.removeLayer(areaRectLayer); areaRectLayer = null; }
-  btnAreaClear.disabled = true;
-  areaNeedsResetAfterSearch = false;
-  updateAreaCount();
 });
 
 document.getElementById('pressureMax').addEventListener('change', updateAreaCount);
@@ -931,6 +786,10 @@ btnUndo.addEventListener('click', () => {
   if (m) map.removeLayer(m);
   if (previewLineLayer) { map.removeLayer(previewLineLayer); previewLineLayer = null; }
   redrawUserLine();
+  // 描画確定後（エリアが自動設定済み）に取り消した場合は、エリアも経路に合わせて更新する
+  if (!drawing && areaBounds) {
+    if (userPoints.length > 0) autoSetAreaFromLine(); else clearArea();
+  }
   updateButtons();
 });
 
@@ -940,6 +799,7 @@ btnClear.addEventListener('click', () => {
   userMarkers = [];
   if (previewLineLayer) { map.removeLayer(previewLineLayer); previewLineLayer = null; }
   redrawUserLine();
+  clearArea();
   clearResults();
   routeNeedsResetAfterSearch = false;
   updateButtons();
@@ -976,42 +836,31 @@ function updateButtons() {
   const areaCandidateCount = areaActive ? getEffectiveTracks().length : 0;
   const areaOnlyOk = areaActive && areaCandidateCount > 0 && areaCandidateCount <= AREA_ONLY_SEARCH_MAX;
 
-  // エリア指定（02）が必須。エリア未指定なら経路の有無に関わらず検索不可。
+  // エリア（経路から自動計算）が未確定なら検索不可。
   const canSearch = areaActive && (hasUserRoute ? areaCandidateCount > 0 : areaOnlyOk);
   btnSearch.disabled = tracks.length === 0 || !canSearch;
 
   // ---- 地図上部のステータス表示（ラベル＋説明文）をここで一括更新 ----
+  // エリアは経路から自動計算されるため、areaActive は実質 hasUserRoute と連動する
+  // （経路確定直後のごく短い経路だけ areaActive のまま hasUserRoute が false になりうる）。
   let label, color, desc;
-  if (areaDrawingMode) {
-    label = 'エリア指定中';
-    color = 'var(--cyan)';
-    desc = areaDragActive
-      ? 'そのままドラッグしてサイズを調整し、マウスを離すと矩形が確定します。'
-      : '地図上をドラッグしてエリア（矩形）を指定してください。';
-  } else if (drawing) {
+  if (drawing) {
     label = '描画中';
     color = 'var(--amber)';
-    desc = '地図をクリックして自分の経路の点を追加してください（2点以上）。ダブルクリックで描画を終了します。';
+    desc = '地図をクリックして自分の経路の点を追加してください（2点以上）。ダブルクリックで描画を終了すると、経路を囲む正方形が自動で絞り込みエリアになります。';
   } else {
     label = '待機中';
     color = 'var(--line)';
-    if (!hasUserRoute && !areaActive) {
-      desc = '① 「経路を描く」をクリックし、地図上で自分の経路を指定してください（2点以上）。';
-    } else if (hasUserRoute && !areaActive) {
-      desc = '② 続けて「エリアを描く」でエリアを指定してください（比較精度を保つため必須です）。';
-    } else if (!hasUserRoute && areaActive) {
-      if (areaCandidateCount === 0) {
-        desc = 'このエリアを通過した台風が見つかりません。エリアを変更するか、経路を描いてください。';
-      } else if (areaCandidateCount > AREA_ONLY_SEARCH_MAX) {
-        desc = `エリア内の候補が${areaCandidateCount}件と多いため、このままでは検索できません。「経路を描く」で自分の経路も指定するか、エリアを狭めるか、詳細設定（中心気圧・勢力・月）で候補を絞り込んでください。`;
-      } else {
-        desc = `③ 経路未指定でも、エリア内の候補（${areaCandidateCount}件）でそのまま検索できます。`;
-        if (areaCandidateCount > 3) desc += ' 候補が多い場合は、詳細設定（中心気圧・勢力・月）でさらに絞り込めます。';
-      }
+    if (!areaActive) {
+      desc = '① 「経路を描く」をクリックし、地図上で自分の経路を指定してください（2点以上）。ダブルクリックで確定すると、絞り込みエリアが自動で設定されます。';
+    } else if (!hasUserRoute) {
+      desc = '経路が短すぎます。「経路を描く」で描き直してください。';
     } else if (areaCandidateCount === 0) {
-      desc = 'このエリアを通過した台風が見つかりません。エリアを変更してください。';
+      desc = 'この経路を囲むエリアを通過した台風が見つかりません。経路を変更してください。';
+    } else if (areaCandidateCount > AREA_ONLY_SEARCH_MAX) {
+      desc = `エリア内の候補が${areaCandidateCount}件と多いため、このままでは検索できません。詳細設定（中心気圧・勢力・月）で候補を絞り込んでください。`;
     } else {
-      desc = '③ 準備完了です。「類似経路を検索」を押してください。';
+      desc = '② 準備完了です。「類似経路を検索」を押してください。';
       if (areaCandidateCount > 3) desc += ' 必要に応じて、詳細設定（中心気圧・勢力・月）で候補をさらに絞り込めます。';
     }
   }
@@ -1443,12 +1292,11 @@ function updateMetricDesc() {
 }
 
 // 「類似経路を検索」を実行した後に、もう一度「経路を描く」/「エリアを描く」を押した際、
-// 古い経路・エリアを自動でクリアしてから新規描画に入れるようにするためのフラグ。
+// 古い経路（と、それに連動するエリア）を自動でクリアしてから新規描画に入れるためのフラグ。
 let routeNeedsResetAfterSearch = false;
-let areaNeedsResetAfterSearch = false;
 
 function runSearch() {
-  if (!areaBounds) return; // エリア指定（02）が必須
+  if (!areaBounds) return; // 経路からエリアが自動計算されている必要がある
   const hasUserRoute = userPoints.length >= 2;
   const candidates = getEffectiveTracks();
   if (candidates.length === 0) return;
@@ -1495,7 +1343,6 @@ function runSearch() {
     renderResults();
     showSearchOverlay(false);
     routeNeedsResetAfterSearch = true;
-    areaNeedsResetAfterSearch = true;
     updateButtons();
   }, 30);
 }
@@ -1644,7 +1491,7 @@ function renderResults() {
 }
 
 function defaultCursor() {
-  return (drawing || areaDrawingMode) ? 'crosshair' : '';
+  return drawing ? 'crosshair' : '';
 }
 
 function drawCandidates() {
@@ -1714,10 +1561,9 @@ sidebarToggleEl.addEventListener('click', () => {
 });
 sidebarOverlayEl.addEventListener('click', closeSidebar);
 
-// スマホ幅では「経路を描く」「エリアを描く」を押したら、地図を操作しやすいよう自動でサイドバーを閉じる
+// スマホ幅では「経路を描く」を押したら、地図を操作しやすいよう自動でサイドバーを閉じる
 const isMobileLayout = () => window.matchMedia('(max-width: 768px)').matches;
 btnDraw.addEventListener('click', () => { if (isMobileLayout() && drawing) closeSidebar(); });
-btnAreaDraw.addEventListener('click', () => { if (isMobileLayout() && areaDrawingMode) closeSidebar(); });
 
 setDrawingMode(true);
 updateButtons();
