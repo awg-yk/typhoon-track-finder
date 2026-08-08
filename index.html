@@ -538,11 +538,19 @@ function computeSquareBoundsFromPoints(points, minSpanDeg) {
     lonMin = Math.min(lonMin, p.lon); lonMax = Math.max(lonMax, p.lon);
   });
   const centerLat = (latMin + latMax) / 2, centerLon = (lonMin + lonMax) / 2;
-  const span = Math.max(latMax - latMin, lonMax - lonMin, minSpanDeg);
-  const half = span / 2;
+  // 地図はWebメルカトル図法（EPSG:3857）で表示されるため、経度方向は緯度に応じて
+  // cos(centerLat) 倍だけ画面上で圧縮される。緯度・経度の「度」の差をそのまま同じに
+  // しても画面上は長方形になってしまうため、経度側の幅を cos(centerLat) で補正した
+  // 「緯度換算幅」で比較し、その換算幅を一辺として画面上で正方形に見えるようにする。
+  const cosLat = Math.cos(centerLat * Math.PI / 180);
+  const latSpan = latMax - latMin;
+  const lonSpanEquiv = (lonMax - lonMin) * cosLat;
+  const sideEquiv = Math.max(latSpan, lonSpanEquiv, minSpanDeg);
+  const halfLat = sideEquiv / 2;
+  const halfLon = (sideEquiv / cosLat) / 2;
   return {
-    latMin: centerLat - half, latMax: centerLat + half,
-    lonMin: centerLon - half, lonMax: centerLon + half
+    latMin: centerLat - halfLat, latMax: centerLat + halfLat,
+    lonMin: centerLon - halfLon, lonMax: centerLon + halfLon
   };
 }
 
