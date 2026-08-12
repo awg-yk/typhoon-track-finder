@@ -964,19 +964,27 @@ function rmsDeviationScore(a, b, n = 101) {
 // 両方向（a→b、b→a）で計算して平均したもの。外れ値1点でスコアが決まって
 // しまうことがなく、安定した「全体としての形の近さ」を測れる。
 // サンプリング密度の偏りを避けるため、弧長正規化した再サンプリング点で計算する。
-// 弱点：時系列の対応（進行順）は仮定しないため、蛇行・停滞・ループが絡む
-// 経路でも位置が近ければ近いと判定されうる点には注意。
+// 進行方向（通過順序）も緩やかに考慮する：各点の探索範囲を、弧長の割合が
+// 近い（＝経路上のだいたい同じ位置にある）点だけに絞ることで、蛇行や
+// 多少のズレには頑健さを保ちつつ、経路全体の向きが逆の相手とは一致しにくく
+// している（「向き（進行方向）を無視して比較する」を外した場合に、実際に
+// 逆向きの経路が除外されるようにするため）。
 // 計算コストが再サンプリング点数の2乗（総当たりの最近傍探索）で増えるため、
 // 平均乖離幅・RMS乖離幅（点数に比例）より重い。精度への影響がごく小さい
 // 範囲（n=101→51で相対誤差は中央値1%程度）で解像度を落とし、体感速度を優先している。
 function chamferScore(a, b, n = 51) {
   const ra = resampleByArcLength(a, n);
   const rb = resampleByArcLength(b, n);
+  // 探索窓：自分の弧長位置から前後25%（最低6点）以内にある相手の点だけを対象にする
+  const window = Math.max(6, Math.round(n * 0.25));
   function directedMean(p, q) {
     let sum = 0;
-    for (const pp of p) {
+    for (let i = 0; i < p.length; i++) {
+      const pp = p[i];
+      const lo = Math.max(0, i - window), hi = Math.min(q.length - 1, i + window);
       let best = Infinity;
-      for (const qq of q) {
+      for (let j = lo; j <= hi; j++) {
+        const qq = q[j];
         const d = haversineKm(pp.lat, pp.lon, qq.lat, qq.lon);
         if (d < best) best = d;
       }
@@ -1275,8 +1283,8 @@ const METRICS = {
   chamfer: {
     fn: chamferScore,
     label: 'チャムファー',
-    tooltip: 'チャムファー距離：時系列を問わず評価した最短距離の平均(km)',
-    desc: '各点から相手の経路上で最も近い点までの距離を求め、その平均で評価します。一部の外れ値に振り回されにくく安定した評価になります（通過順序は考慮しません）。',
+    tooltip: 'チャムファー距離：経路上のだいたい同じ位置にある点同士の最短距離の平均(km)',
+    desc: '各点から相手の経路上のだいたい同じ位置（弧長の割合が近い範囲）で最も近い点までの距離を求め、その平均で評価します。一部の外れ値に振り回されにくく安定した評価になりつつ、進行方向が大きく異なる経路は一致しにくくなります。',
   },
   avg: {
     fn: avgDeviationScore,
