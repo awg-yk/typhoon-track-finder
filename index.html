@@ -317,10 +317,6 @@
         <button id="btnDraw" class="primary">経路を描く</button>
         <button id="btnUndo" disabled>1点戻す</button>
       </div>
-      <label class="toggle">
-        <input type="checkbox" id="ignoreDir" checked>
-        向き（進行方向）を無視して比較する
-      </label>
     </div>
 
     <div class="section">
@@ -966,9 +962,7 @@ function rmsDeviationScore(a, b, n = 101) {
 // サンプリング密度の偏りを避けるため、弧長正規化した再サンプリング点で計算する。
 // 進行方向（通過順序）も緩やかに考慮する：各点の探索範囲を、弧長の割合が
 // 近い（＝経路上のだいたい同じ位置にある）点だけに絞ることで、蛇行や
-// 多少のズレには頑健さを保ちつつ、経路全体の向きが逆の相手とは一致しにくく
-// している（「向き（進行方向）を無視して比較する」を外した場合に、実際に
-// 逆向きの経路が除外されるようにするため）。
+// 多少のズレには頑健さを保ちつつ、経路全体の向きが逆の相手とは一致しにくくしている。
 // 計算コストが再サンプリング点数の2乗（総当たりの最近傍探索）で増えるため、
 // 平均乖離幅・RMS乖離幅（点数に比例）より重い。精度への影響がごく小さい
 // 範囲（n=101→51で相対誤差は中央値1%程度）で解像度を落とし、体感速度を優先している。
@@ -1329,16 +1323,10 @@ function runSearch() {
       const userClipped = primaryAreaSegment(userPoints, areaBounds);
       const userForCompare = (userClipped && userClipped.length >= 2) ? userClipped : userPoints;
 
-      const ignoreDir = document.getElementById('ignoreDir').checked;
-      const userRev = ignoreDir ? [...userForCompare].reverse() : null;
       const metric = document.getElementById('metricSelect').value;
       lastMetric = metric;
       const scoreFn = METRICS[metric].fn;
-      scored = candidates.map(c => {
-        let score = scoreFn(userForCompare, c.points);
-        if (ignoreDir) score = Math.min(score, scoreFn(userRev, c.points));
-        return { track: c.track, points: c.points, score };
-      });
+      scored = candidates.map(c => ({ track: c.track, points: c.points, score: scoreFn(userForCompare, c.points) }));
       scored.sort((a, b) => a.score - b.score);
     } else {
       // 経路未指定：エリアで絞り込まれた台風をそのまま一覧表示（スコアなし）
