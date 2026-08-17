@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/30114222/README.md)
 # 台風トレース検索 (Typhoon Track Similarity Console)
 
 地図上でエリア（と、任意で自分の経路）を指定すると、気象庁のベストトラックデータの中から**条件に合う過去の台風**をランキング形式で検索できるWebツールです。サーバー不要・単一HTMLファイルで動作します。
